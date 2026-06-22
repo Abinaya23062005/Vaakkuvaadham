@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, type User as FirebaseUser } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, sendPasswordResetEmail, type User as FirebaseUser } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, updateDoc, increment } from 'firebase/firestore';
 
 const firebaseConfig = {
@@ -59,5 +59,6 @@ export const signInWithGoogle = async (): Promise<FirebaseUser> => { const r = a
 export const signInWithEmail = async (email: string, password: string): Promise<FirebaseUser> => { const r = await signInWithEmailAndPassword(auth, email, password); return r.user; };
 export const signUpWithEmail = async (email: string, password: string, name: string): Promise<FirebaseUser> => { const r = await createUserWithEmailAndPassword(auth, email, password); await updateProfile(r.user, { displayName: name }); return r.user; };
 export const signOutUser = async (): Promise<void> => { await signOut(auth); };
+export const resetPassword = async (email: string): Promise<void> => { await sendPasswordResetEmail(auth, email); };
 export { onAuthStateChanged };
 export type { FirebaseUser };

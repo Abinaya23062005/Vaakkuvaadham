@@ -124,7 +124,7 @@ export default function VoiceInput({ onTranscript, placeholder, language = 'engl
         <button
           onClick={isListening ? stopListening : startListening}
           style={{
-            width: 40, height: 40, borderRadius: 10, border: 'none', cursor: 'pointer',
+            width: 40, height: 40, borderRadius: 10, cursor: 'pointer',
             background: isListening ? '#dc2626' : 'var(--bg-tertiary)',
             border: isListening ? 'none' : '1px solid var(--border)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',

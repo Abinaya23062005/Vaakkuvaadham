@@ -169,7 +169,7 @@ export default function ClauseLibrary({ showTamil, searchTerm: externalSearch }:
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {categories.map(cat => (
             <button key={cat} onClick={() => setFilterCategory(cat)} style={{
-              padding: '4px 10px', borderRadius: 99, border: 'none', fontSize: 11,
+              padding: '4px 10px', borderRadius: 99, fontSize: 11,
               fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
               background: filterCategory === cat ? 'var(--primary)' : 'var(--bg-secondary)',
               color: filterCategory === cat ? 'white' : 'var(--text-secondary)',
@@ -181,7 +181,7 @@ export default function ClauseLibrary({ showTamil, searchTerm: externalSearch }:
           <div style={{ width: 1, background: 'var(--border)', margin: '0 2px' }} />
           {['All', 'High', 'Medium', 'Low', 'Standard'].map(r => (
             <button key={r} onClick={() => setFilterRisk(r)} style={{
-              padding: '4px 10px', borderRadius: 99, border: 'none', fontSize: 11,
+              padding: '4px 10px', borderRadius: 99, fontSize: 11,
               fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
               background: filterRisk === r ? 'var(--bg-tertiary)' : 'transparent',
               color: filterRisk === r ? 'var(--text-primary)' : 'var(--text-muted)',
