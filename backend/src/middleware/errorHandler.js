@@ -3,6 +3,14 @@ const logger = require('../utils/logger');
 const errorHandler = (err, req, res, next) => {
   logger.error(err.message, { stack: err.stack });
 
+  if (err.code === 'OCR_NEEDED') {
+    return res.status(422).json({
+      error: err.message,
+      code: 'OCR_NEEDED',
+      pageCount: err.pageCount,
+    });
+  }
+
   if (err instanceof require('multer').MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({ error: 'File too large. Maximum size is 10MB.' });
