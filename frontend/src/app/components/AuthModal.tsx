@@ -11,6 +11,7 @@ export interface AppUser {
   analysisCount: number;
   monthYear: string;
   totalAnalyses: number;
+  paidCredits: number;
 }
 
 export const FREE_LIMIT = 10;
@@ -37,7 +38,8 @@ const ERROR_MAP: Record<string, string> = {
 };
 
 export default function AuthModal({ isOpen, onClose, onLogin }: AuthModalProps) {
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login');
+  const [resetSent, setResetSent] = useState(false);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
@@ -49,7 +51,7 @@ export default function AuthModal({ isOpen, onClose, onLogin }: AuthModalProps) 
 
   useEffect(() => {
     if (isOpen) {
-      setError(''); setEmail(''); setPassword(''); setName('');
+      setError(''); setEmail(''); setPassword(''); setName(''); setResetSent(false); setMode('login');
       // Check if Firebase is configured
       const isConfigured = process.env.NEXT_PUBLIC_FIREBASE_API_KEY &&
         process.env.NEXT_PUBLIC_FIREBASE_API_KEY !== 'YOUR_API_KEY';
@@ -80,6 +82,7 @@ export default function AuthModal({ isOpen, onClose, onLogin }: AuthModalProps) 
         analysisCount: userDoc.analysisCount,
         monthYear: userDoc.monthYear,
         totalAnalyses: userDoc.totalAnalyses,
+        paidCredits: userDoc.paidCredits || 0,
       });
       onClose();
     } catch (err: any) {
@@ -113,10 +116,39 @@ export default function AuthModal({ isOpen, onClose, onLogin }: AuthModalProps) 
         analysisCount: userDoc.analysisCount,
         monthYear: userDoc.monthYear,
         totalAnalyses: userDoc.totalAnalyses,
+        paidCredits: userDoc.paidCredits || 0,
       });
       onClose();
     } catch (err: any) {
       setError(ERROR_MAP[err.code] || err.message || 'Authentication failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!email.trim()) { setError('Please enter your email address'); return; }
+    if (!/\S+@\S+\.\S+/.test(email)) { setError('Please enter a valid email address'); return; }
+    if (!firebaseReady) { setError('Firebase is not configured yet. See setup instructions below.'); return; }
+
+    setLoading(true);
+    setError('');
+    try {
+      const { resetPassword } = await import('../lib/firebase');
+      await resetPassword(email.trim());
+      // Always show success, even if the email doesn't have an account.
+      // This is intentional: revealing "no account with this email" would
+      // let someone enumerate which emails are registered on NyayaAI.
+      setResetSent(true);
+    } catch (err: any) {
+      if (err.code === 'auth/invalid-email') {
+        setError('Please enter a valid email address.');
+      } else if (err.code === 'auth/too-many-requests') {
+        setError('Too many reset attempts. Please wait a few minutes and try again.');
+      } else {
+        // Same reasoning as above — don't leak account existence on generic errors either.
+        setResetSent(true);
+      }
     } finally {
       setLoading(false);
     }
@@ -145,28 +177,30 @@ export default function AuthModal({ isOpen, onClose, onLogin }: AuthModalProps) 
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round"><path d="M12 3v18M8 7H3l3 6-3 6h5M16 7h5l-3 6 3 6h-5M8 7h8"/></svg>
           </div>
           <h2 style={{ fontSize: 21, fontWeight: 900, color: 'var(--text-primary)', letterSpacing: '-0.03em', marginBottom: 3 }}>
-            {mode === 'login' ? 'Welcome back' : 'Create Account'}
+            {mode === 'login' ? 'Welcome back' : mode === 'signup' ? 'Create Account' : 'Reset Password'}
           </h2>
           <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-            {mode === 'login' ? 'Sign in to your NyayaAI account' : 'Join NyayaAI — free forever'}
+            {mode === 'login' ? 'Sign in to your NyayaAI account' : mode === 'signup' ? 'Join NyayaAI — free forever' : "We'll email you a link to reset it"}
           </p>
         </div>
 
-        {/* Free plan info */}
-        <div style={{ background: 'rgba(22,163,74,0.07)', border: '1px solid rgba(22,163,74,0.2)', borderRadius: 10, padding: '10px 14px', marginBottom: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-            <span style={{ fontSize: 16, flexShrink: 0 }}>🎉</span>
-            <div>
-              <p style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>Free Plan — {FREE_LIMIT} analyses per month</p>
-              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.5 }}>
-                After {FREE_LIMIT} free analyses, pay just ₹{PAYMENT_AMOUNT} per document. No subscription — pay only when you need.
-              </p>
-              <p className="tamil" style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-                மாதம் {FREE_LIMIT} பகுப்பாய்வுகள் இலவசம் · பிறகு ₹{PAYMENT_AMOUNT} மட்டும்
-              </p>
+        {/* Free plan info — hidden during password reset, not relevant there */}
+        {mode !== 'reset' && (
+          <div style={{ background: 'rgba(22,163,74,0.07)', border: '1px solid rgba(22,163,74,0.2)', borderRadius: 10, padding: '10px 14px', marginBottom: 18 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+              <span style={{ fontSize: 16, flexShrink: 0 }}>🎉</span>
+              <div>
+                <p style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>Free Plan — {FREE_LIMIT} analyses per month</p>
+                <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.5 }}>
+                  After {FREE_LIMIT} free analyses, pay just ₹{PAYMENT_AMOUNT} per document. No subscription — pay only when you need.
+                </p>
+                <p className="tamil" style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+                  மாதம் {FREE_LIMIT} பகுப்பாய்வுகள் இலவசம் · பிறகு ₹{PAYMENT_AMOUNT} மட்டும்
+                </p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Firebase not configured warning */}
         {!firebaseReady && (
@@ -183,6 +217,54 @@ NEXT_PUBLIC_FIREBASE_PROJECT_ID=xxx`}</pre>
             </p>
           </div>
         )}
+
+        {/* Password reset mode — its own self-contained flow */}
+        {mode === 'reset' ? (
+          <div>
+            {resetSent ? (
+              <div style={{ textAlign: 'center', padding: '10px 0 6px' }}>
+                <div style={{ width: 48, height: 48, borderRadius: 12, background: '#f0fdf4', border: '1px solid #bbf7d0', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px', fontSize: 22 }}>✉️</div>
+                <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Check your inbox</p>
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 4 }}>
+                  If an account exists for <strong>{email}</strong>, we've sent a password reset link. It may take a minute to arrive — check spam too.
+                </p>
+                <p className="tamil" style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7, marginBottom: 18 }}>
+                  உங்கள் மின்னஞ்சலை சரிபார்க்கவும்
+                </p>
+                <button onClick={() => { setMode('login'); setResetSent(false); }} style={{ background: 'var(--primary)', color: 'white', border: 'none', borderRadius: 10, padding: '10px 22px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                  Back to Sign In
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Email Address</label>
+                  <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="you@example.com"
+                    onKeyDown={e => e.key === 'Enter' && handlePasswordReset()}
+                    style={inputStyle}
+                    onFocus={e => { e.target.style.borderColor = 'var(--primary)'; e.target.style.boxShadow = '0 0 0 3px rgba(232,93,38,0.1)'; }}
+                    onBlur={e => { e.target.style.borderColor = 'var(--border)'; e.target.style.boxShadow = 'none'; }} />
+                </div>
+
+                {error && (
+                  <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '9px 12px', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    <p style={{ fontSize: 12, color: '#dc2626', lineHeight: 1.5 }}>{error}</p>
+                  </div>
+                )}
+
+                <button onClick={handlePasswordReset} disabled={loading} style={{ width: '100%', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: 10, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1, boxShadow: '0 4px 16px rgba(232,93,38,0.35)' }}>
+                  {loading ? 'Sending...' : 'Send Reset Link'}
+                </button>
+
+                <button onClick={() => { setMode('login'); setError(''); }} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer', marginTop: 2 }}>
+                  ← Back to Sign In
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+        <>
 
         {/* Google button */}
         <button onClick={handleGoogleLogin} disabled={googleLoading}
@@ -232,7 +314,14 @@ NEXT_PUBLIC_FIREBASE_PROJECT_ID=xxx`}</pre>
               onBlur={e => { e.target.style.borderColor = 'var(--border)'; e.target.style.boxShadow = 'none'; }} />
           </div>
           <div>
-            <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Password</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
+              <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Password</label>
+              {mode === 'login' && (
+                <button type="button" onClick={() => { setMode('reset'); setError(''); }} style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                  Forgot password?
+                </button>
+              )}
+            </div>
             <div style={{ position: 'relative' }}>
               <input value={password} onChange={e => setPassword(e.target.value)} type={showPassword ? 'text' : 'password'} placeholder="Minimum 6 characters"
                 onKeyDown={e => e.key === 'Enter' && handleEmailAuth()}
@@ -269,6 +358,8 @@ NEXT_PUBLIC_FIREBASE_PROJECT_ID=xxx`}</pre>
         <p style={{ textAlign: 'center', fontSize: 10, color: 'var(--text-muted)', marginTop: 10, lineHeight: 1.5 }}>
           By continuing you agree to NyayaAI Terms of Service · Your data is never sold
         </p>
+        </>
+        )}
       </div>
       <style>{`@keyframes slideUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}} @keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>

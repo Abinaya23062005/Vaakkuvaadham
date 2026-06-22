@@ -3,8 +3,9 @@ const router = express.Router();
 const { analyzeDocument, chatWithDocument, compareDocuments, generateNegotiationTips } = require('../services/aiService');
 const { validateText } = require('../services/pdfService');
 const logger = require('../utils/logger');
+const { verifyToken, checkUsageLimit, incrementUsageAfterSuccess } = require('../middleware/auth');
 
-router.post('/text', async (req, res, next) => {
+router.post('/text', verifyToken, checkUsageLimit, async (req, res, next) => {
   const start = Date.now();
   try {
     const { text, language = 'tamil' } = req.body;
@@ -12,7 +13,10 @@ router.post('/text', async (req, res, next) => {
 
     const validText = validateText(text);
     const analysis = await analyzeDocument(validText, language);
-    logger.info(`Analysis completed in ${Date.now() - start}ms, risk: ${analysis.overallRisk}`);
+    logger.info(`Analysis completed in ${Date.now() - start}ms, risk: ${analysis.overallRisk} for user ${req.uid}`);
+
+    // Only spend the credit after a successful analysis
+    await incrementUsageAfterSuccess(req);
 
     res.json({ success: true, analysis, processingTime: Date.now() - start });
   } catch (err) {

@@ -25,6 +25,7 @@ import AuthModal, { type AppUser } from './components/AuthModal';
 import PaymentGate from './components/PaymentGate';
 import UsageIndicator from './components/UsageIndicator';
 import LandingPage from './components/LandingPage';
+import ErrorBoundary from './components/ErrorBoundary';
 import { uploadDocument, analyzeText, getSampleAnalysis } from './lib/api';
 import type { Analysis } from './lib/api';
 
@@ -88,6 +89,7 @@ export default function Home() {
   const [user, setUser] = useState<AppUser | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+  const [ocrHintFile, setOcrHintFile] = useState<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -113,7 +115,14 @@ export default function Home() {
     if (pendingAction) { pendingAction(); setPendingAction(null); }
   };
 
-  // Check usage limit before analysis
+  // checkAndProceed is now a fast UX hint only — it shows the sign-in or
+  // payment modal early using the last-known client-side count so the user
+  // isn't stuck staring at a loading spinner before getting rejected.
+  // The REAL enforcement happens server-side in checkUsageLimit (backend
+  // middleware), which verifies the Firebase ID token and reads Firestore
+  // directly. If the client-side hint is stale or has been tampered with,
+  // the backend will still reject with a 402 LIMIT_REACHED error, which is
+  // caught below and shown as the payment gate.
   const checkAndProceed = (action: () => void) => {
     if (!user) {
       setPendingAction(() => action);
@@ -129,60 +138,98 @@ export default function Home() {
     action();
   };
 
+  // Refreshes the locally-cached user object from Firestore (the source of
+  // truth) after a successful analysis, instead of guessing the new count
+  // on the client.
+  const refreshUserFromServer = async () => {
+    if (!user) return;
+    try {
+      const { auth, getOrCreateUserDoc } = await import('./lib/firebase');
+      if (!auth.currentUser) return;
+      const fresh = await getOrCreateUserDoc(auth.currentUser);
+      const updated: AppUser = {
+        uid: fresh.uid, name: fresh.name, email: fresh.email, photoURL: fresh.photoURL,
+        plan: fresh.plan, analysisCount: fresh.analysisCount, monthYear: fresh.monthYear,
+        totalAnalyses: fresh.totalAnalyses, paidCredits: fresh.paidCredits,
+      };
+      setUser(updated);
+      localStorage.setItem('nyayaai_user', JSON.stringify(updated));
+    } catch {}
+  };
+
+  // Maps backend error codes to user-facing behavior. Returns true if the
+  // error was a known usage/auth error and was handled (so the caller
+  // shouldn't also show a generic error screen).
+  const handleUsageError = (err: any, retryAction: () => void): boolean => {
+    if (err?.code === 'LIMIT_REACHED') {
+      setPendingAction(() => retryAction);
+      setShowPayment(true);
+      setState('idle');
+      return true;
+    }
+    if (err?.code === 'AUTH_REQUIRED') {
+      setPendingAction(() => retryAction);
+      setShowAuth(true);
+      setState('idle');
+      return true;
+    }
+    return false;
+  };
+
   const handleFileSelect = useCallback((file: File) => {
-    checkAndProceed(async () => {
-      setCurrentFile(file.name);
-      setState('processing');
-      setUploadProgress(0);
-      try {
-        const result = await uploadDocument(file, language, setUploadProgress);
-        setAnalysis(result.analysis);
-        setProcessingTime(result.processingTime);
-        saveToHistory(result.analysis, file.name);
-        // Update local user count
-        if (user) {
-          const updated = { ...user, analysisCount: user.analysisCount + 1 };
-          setUser(updated);
-          localStorage.setItem('nyayaai_user', JSON.stringify(updated));
-          // Also update Firestore
-          try {
-            const { incrementAnalysisCount } = await import('./lib/firebase');
-            await incrementAnalysisCount(user.uid);
-          } catch {}
-        }
-        setState('results');
-      } catch (err: any) {
-        setErrorMsg(err.response?.data?.error || err.message || 'Analysis failed.');
-        setState('error');
+    const action = () => doFileAnalysis(file);
+    checkAndProceed(action);
+  }, [language, user]);
+
+  const doFileAnalysis = useCallback(async (file: File) => {
+    setCurrentFile(file.name);
+    setState('processing');
+    setUploadProgress(0);
+    try {
+      const result = await uploadDocument(file, language, setUploadProgress);
+      setAnalysis(result.analysis);
+      setProcessingTime(result.processingTime);
+      saveToHistory(result.analysis, file.name);
+      await refreshUserFromServer(); // sync the real count from Firestore
+      setState('results');
+    } catch (err: any) {
+      if (handleUsageError(err, () => doFileAnalysis(file))) return;
+      if (err?.code === 'OCR_NEEDED') {
+        // This PDF has no text layer — it was never sent to the AI, and no
+        // usage credit was spent. Route the user straight into the
+        // Scan Image flow instead of a dead-end error screen.
+        setState('idle');
+        setHomeTab('analyze');
+        setInputMode('image');
+        setErrorMsg('');
+        setOcrHintFile(file.name);
+        return;
       }
-    });
+      setErrorMsg(err.response?.data?.error || err.message || 'Analysis failed.');
+      setState('error');
+    }
   }, [language, user]);
 
   const handleTextAnalyze = useCallback(() => {
     if (!textInput.trim() || textInput.length < 100) return;
-    checkAndProceed(async () => {
-      setState('processing');
-      setCurrentFile('Pasted document');
-      try {
-        const result = await analyzeText(textInput, language);
-        setAnalysis(result.analysis);
-        setProcessingTime(0);
-        saveToHistory(result.analysis, 'Pasted document');
-        if (user) {
-          const updated = { ...user, analysisCount: user.analysisCount + 1 };
-          setUser(updated);
-          localStorage.setItem('nyayaai_user', JSON.stringify(updated));
-          try {
-            const { incrementAnalysisCount } = await import('./lib/firebase');
-            await incrementAnalysisCount(user.uid);
-          } catch {}
-        }
-        setState('results');
-      } catch (err: any) {
-        setErrorMsg(err.response?.data?.error || err.message || 'Analysis failed.');
-        setState('error');
-      }
-    });
+    checkAndProceed(() => doTextAnalysis());
+  }, [textInput, language, user]);
+
+  const doTextAnalysis = useCallback(async () => {
+    setState('processing');
+    setCurrentFile('Pasted document');
+    try {
+      const result = await analyzeText(textInput, language);
+      setAnalysis(result.analysis);
+      setProcessingTime(0);
+      saveToHistory(result.analysis, 'Pasted document');
+      await refreshUserFromServer();
+      setState('results');
+    } catch (err: any) {
+      if (handleUsageError(err, () => doTextAnalysis())) return;
+      setErrorMsg(err.response?.data?.error || err.message || 'Analysis failed.');
+      setState('error');
+    }
   }, [textInput, language, user]);
 
   const handleSampleDemo = () => {
@@ -399,7 +446,7 @@ export default function Home() {
                       { id: 'image' as InputMode, Icon: I.Image, label: t('Scan Image', 'ஸ்கேன்') },
                       { id: 'text' as InputMode, Icon: I.Edit, label: t('Paste Text', 'உரை') },
                     ].map(m => (
-                      <button key={m.id} onClick={() => setInputMode(m.id)} style={{ flex: 1, padding: '9px 8px', borderRadius: 9, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', background: inputMode === m.id ? 'var(--bg-card)' : 'transparent', color: inputMode === m.id ? 'var(--primary)' : 'var(--text-secondary)', boxShadow: inputMode === m.id ? '0 2px 8px rgba(0,0,0,0.08)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                      <button key={m.id} onClick={() => { setInputMode(m.id); if (m.id !== 'image') setOcrHintFile(null); }} style={{ flex: 1, padding: '9px 8px', borderRadius: 9, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', background: inputMode === m.id ? 'var(--bg-card)' : 'transparent', color: inputMode === m.id ? 'var(--primary)' : 'var(--text-secondary)', boxShadow: inputMode === m.id ? '0 2px 8px rgba(0,0,0,0.08)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
                         <m.Icon /> {m.label}
                       </button>
                     ))}
@@ -407,7 +454,19 @@ export default function Home() {
 
                   <div className="fade-in" key={inputMode}>
                     {inputMode === 'upload' && <UploadZone onFileSelect={handleFileSelect} />}
-                    {inputMode === 'image' && <ImageScanner onTextExtracted={(text) => { setTextInput(text); setInputMode('text'); }} />}
+                    {inputMode === 'image' && (
+                      <div>
+                        {ocrHintFile && (
+                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 14px', borderRadius: 10, background: '#fffbeb', border: '1px solid #fde68a', marginBottom: 12 }}>
+                            <span style={{ fontSize: 14, flexShrink: 0 }}>ℹ️</span>
+                            <p style={{ fontSize: 12, color: '#92400e', lineHeight: 1.6 }}>
+                              <strong>{ocrHintFile}</strong> {t("looks like a scanned PDF with no readable text layer, so it wasn't analyzed (and no credit was used). Take a photo or upload an image of it below instead.", 'இது ஸ்கேன் செய்யப்பட்ட PDF போல் தெரிகிறது. கீழே ஒரு படத்தை பதிவேற்றவும்.')}
+                            </p>
+                          </div>
+                        )}
+                        <ImageScanner onTextExtracted={(text) => { setTextInput(text); setInputMode('text'); setOcrHintFile(null); }} />
+                      </div>
+                    )}
                     {inputMode === 'text' && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                         <div style={{ padding: '10px 12px', background: 'var(--bg-secondary)', borderRadius: 10, border: '1px solid var(--border)' }}>
@@ -572,13 +631,15 @@ export default function Home() {
             </div>
 
             <div style={{ ...card, padding: '22px 18px', marginBottom: 12 }} className="fade-in" key={activeTab}>
-              {activeTab === 'summary' && <SummaryPanel analysis={analysis} showTamil={showTamil} viewMode={viewMode} />}
-              {activeTab === 'redflags' && <RedFlagsPanel flags={analysis.redFlags || []} showTamil={showTamil} />}
-              {activeTab === 'checklist' && <BeforeYouSign analysis={analysis} showTamil={showTamil} />}
-              {activeTab === 'chat' && <ChatWithDoc analysis={analysis} showTamil={showTamil} />}
-              {activeTab === 'negotiate' && <NegotiationCoach analysis={analysis} showTamil={showTamil} />}
-              {activeTab === 'compare' && <CompareDocuments currentAnalysis={analysis} showTamil={showTamil} />}
-              {activeTab === 'generate' && <DocumentGeneration showTamil={showTamil} />}
+              <ErrorBoundary key={activeTab} compact>
+                {activeTab === 'summary' && <SummaryPanel analysis={analysis} showTamil={showTamil} viewMode={viewMode} />}
+                {activeTab === 'redflags' && <RedFlagsPanel flags={analysis.redFlags || []} showTamil={showTamil} />}
+                {activeTab === 'checklist' && <BeforeYouSign analysis={analysis} showTamil={showTamil} />}
+                {activeTab === 'chat' && <ChatWithDoc analysis={analysis} showTamil={showTamil} />}
+                {activeTab === 'negotiate' && <NegotiationCoach analysis={analysis} showTamil={showTamil} />}
+                {activeTab === 'compare' && <CompareDocuments currentAnalysis={analysis} showTamil={showTamil} />}
+                {activeTab === 'generate' && <DocumentGeneration showTamil={showTamil} />}
+              </ErrorBoundary>
             </div>
 
             <div style={{ ...card, padding: 18, marginBottom: 10 }}>

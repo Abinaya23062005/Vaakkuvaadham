@@ -4,6 +4,57 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
 
 const api = axios.create({ baseURL: `${API_URL}/api` });
 
+// Attach the current Firebase ID token to every outgoing request.
+// This is what lets the backend verify identity and enforce usage limits
+// server-side instead of trusting any count the client sends.
+api.interceptors.request.use(async (config) => {
+  try {
+    const { auth } = await import('./firebase');
+    const user = auth.currentUser;
+    if (user) {
+      const token = await user.getIdToken();
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+  } catch {
+    // Firebase not configured yet, or no user signed in — proceed without a token.
+    // checkUsageLimit on the backend will reject with 401/402 as appropriate.
+  }
+  return config;
+});
+
+export class UsageLimitError extends Error {
+  code: string;
+  constructor(message: string) {
+    super(message);
+    this.code = 'LIMIT_REACHED';
+  }
+}
+export class AuthRequiredError extends Error {
+  code: string;
+  constructor(message: string) {
+    super(message);
+    this.code = 'AUTH_REQUIRED';
+  }
+}
+export class OCRNeededError extends Error {
+  code: string;
+  pageCount?: number;
+  constructor(message: string, pageCount?: number) {
+    super(message);
+    this.code = 'OCR_NEEDED';
+    this.pageCount = pageCount;
+  }
+}
+
+const unwrapUsageErrors = (err: any) => {
+  const code = err?.response?.data?.code;
+  const msg = err?.response?.data?.error || err.message;
+  if (code === 'LIMIT_REACHED') throw new UsageLimitError(msg);
+  if (code === 'AUTH_REQUIRED') throw new AuthRequiredError(msg);
+  if (code === 'OCR_NEEDED') throw new OCRNeededError(msg, err?.response?.data?.pageCount);
+  throw err;
+};
+
 export interface RedFlag {
   clause: string;
   risk: 'high' | 'medium' | 'low';
@@ -55,18 +106,26 @@ export const uploadDocument = async (
   formData.append('document', file);
   formData.append('language', language);
 
-  const response = await api.post('/documents/upload', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    onUploadProgress: (e) => {
-      if (onProgress && e.total) onProgress(Math.round((e.loaded * 100) / e.total));
-    },
-  });
-  return response.data;
+  try {
+    const response = await api.post('/documents/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (e) => {
+        if (onProgress && e.total) onProgress(Math.round((e.loaded * 100) / e.total));
+      },
+    });
+    return response.data;
+  } catch (err) {
+    return unwrapUsageErrors(err);
+  }
 };
 
 export const analyzeText = async (text: string, language: string) => {
-  const response = await api.post('/analysis/text', { text, language });
-  return response.data;
+  try {
+    const response = await api.post('/analysis/text', { text, language });
+    return response.data;
+  } catch (err) {
+    return unwrapUsageErrors(err);
+  }
 };
 
 export const chatWithDocument = async (question: string, analysis: Analysis, language: string) => {

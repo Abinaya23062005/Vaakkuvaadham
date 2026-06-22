@@ -10,6 +10,9 @@ node_modules/
 backend/.env
 frontend/.env.local
 
+# Firebase Admin service account credentials - NEVER commit this
+backend/serviceAccountKey.json
+
 # Next.js build output
 frontend/.next/
 frontend/out/

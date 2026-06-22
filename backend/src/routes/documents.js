@@ -6,6 +6,7 @@ const { extractTextFromPDF, validateText } = require('../services/pdfService');
 const { analyzeDocument } = require('../services/aiService');
 const logger = require('../utils/logger');
 const { uploadLimiter } = require('../middleware/rateLimiter');
+const { verifyToken, checkUsageLimit, incrementUsageAfterSuccess } = require('../middleware/auth');
 
 let Document;
 try { Document = require('../models/Document'); } catch {}
@@ -22,12 +23,12 @@ const upload = multer({
   },
 });
 
-router.post('/upload', uploadLimiter, upload.single('document'), async (req, res, next) => {
+router.post('/upload', uploadLimiter, verifyToken, checkUsageLimit, upload.single('document'), async (req, res, next) => {
   const start = Date.now();
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    logger.info(`Processing upload: ${req.file.originalname} (${req.file.size} bytes)`);
+    logger.info(`Processing upload: ${req.file.originalname} (${req.file.size} bytes) for user ${req.uid}`);
 
     const { text, pageCount } = await extractTextFromPDF(req.file.buffer);
     const validText = validateText(text);
@@ -38,6 +39,9 @@ router.post('/upload', uploadLimiter, upload.single('document'), async (req, res
     const processingTime = Date.now() - start;
 
     logger.info(`Analysis completed in ${processingTime}ms, risk: ${analysis.overallRisk}`);
+
+    // Only now that analysis succeeded do we spend the user's free/paid credit
+    await incrementUsageAfterSuccess(req);
 
     // Try Mongo, fallback to memory
     try {
