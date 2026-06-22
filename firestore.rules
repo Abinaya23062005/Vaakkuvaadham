@@ -1,0 +1,40 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users can only read/write their OWN user document.
+    // Critically: analysisCount, paidCredits, and plan can ONLY be modified
+    // by the backend (via Firebase Admin SDK, which bypasses these rules
+    // entirely). This blocks a user from opening DevTools and writing
+    // { analysisCount: 0 } directly to their own Firestore document to
+    // reset their free-tier usage.
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      // Allow create only for the user's own doc, and only with safe
+      // initial values (count must start at 0, plan must start as 'free').
+      allow create: if request.auth != null
+                    && request.auth.uid == userId
+                    && request.resource.data.uid == userId
+                    && request.resource.data.analysisCount == 0
+                    && request.resource.data.plan == 'free';
+
+      // Disallow direct client updates to the fields that gate payment.
+      // The backend (Firebase Admin) is exempt from these rules entirely,
+      // so server-side incrementUsageAfterSuccess() still works fine.
+      allow update: if request.auth != null
+                    && request.auth.uid == userId
+                    && request.resource.data.analysisCount == resource.data.analysisCount
+                    && request.resource.data.paidCredits == resource.data.paidCredits
+                    && request.resource.data.plan == resource.data.plan;
+
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Deny everything else by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
