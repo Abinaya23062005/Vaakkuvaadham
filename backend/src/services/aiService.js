@@ -1,8 +1,9 @@
-const Groq = require('groq-sdk');
+// AFTER
+const Cerebras = require('@cerebras/cerebras_cloud_sdk');
 const logger = require('../utils/logger');
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const MODEL = 'llama-3.3-70b-versatile';
+const groq = new Cerebras({ apiKey: process.env.CEREBRAS_API_KEY });
+const MODEL = 'llama3.1-8b';   // or 'llama-3.3-70b' if available on your account
 
 const LANGUAGE_NAMES = {
   tamil: 'Tamil', english: 'English', telugu: 'Telugu',
