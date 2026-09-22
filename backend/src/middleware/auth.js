@@ -60,15 +60,16 @@ const requireAuth = (req, res, next) => {
  * succeeds, so a failed analysis never costs the user a credit.
  */
 const checkUsageLimit = async (req, res, next) => {
+  if (!isInitialized()) {
+    logger.warn('Firebase Admin not initialized — skipping auth check');
+    req.usageInfo = { bypass: true };
+    return next();
+  }
+
   if (!req.uid) {
     return res.status(401).json({ error: 'Please sign in to analyze documents.', code: 'AUTH_REQUIRED' });
   }
 
-  if (!isInitialized()) {
-    logger.warn('Firebase Admin not initialized — allowing request without usage check (DEV ONLY)');
-    req.usageInfo = { bypass: true };
-    return next();
-  }
 
   try {
     const db = getFirestore();
