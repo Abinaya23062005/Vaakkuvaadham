@@ -21,7 +21,10 @@
     "pdf-parse": "^1.1.1",
     "razorpay": "^2.9.2",
     "uuid": "^10.0.0",
-    "winston": "^3.13.0"
+    "winston": "^3.13.0",
+  "@cerebras/cerebras_cloud_sdk": "^1.29.0",
+  "groq-sdk": "^0.x.x",
+  "express": "^4.x.x"
   },
   "devDependencies": {
     "nodemon": "^3.1.3"
